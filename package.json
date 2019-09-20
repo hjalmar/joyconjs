@@ -1,0 +1,9 @@
+{
+  "name": "joyconjs",
+  "version": "1.0.0",
+  "description": "",
+  "main": "joycon.js",
+  "scripts": {},
+  "author": "Jens Hjalmarsson",
+  "license": "ISC"
+}
