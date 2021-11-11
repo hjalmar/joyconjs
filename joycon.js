@@ -58,9 +58,6 @@ class Button{
   on(){
     if(this.state.pressed){
       const callback = this.__getCallback('on'); 
-      if(this.state.value < this.threshold){
-        return
-      }
       if(callback && this.passedThreshold){
         callback.call(null, { ...this.state });
       }
@@ -198,9 +195,7 @@ class Gamepad{
         }
       });     
     }
-    if(!applyThreshold){
-      return;  
-    }
+    if(!applyThreshold) return;  
     return { threshold };
   }
   rumble(data){
@@ -223,9 +218,16 @@ class Gamepad{
       this.__axesCallbacks.set(key, new Axis(key, fn));
     }
 
-    const threshold = (value) => {
+    const threshold = (x, y) => {
+      if(isNaN(x)) return;
       if(this.__axesCallbacks.has(key)){
-        const [ x, y ] = value;
+        if(isNaN(y)) {
+          if(Array.isArray(x)) {
+            [ x, y ] = x;
+          }else{
+            y = x;
+          }
+        }
         if(!isNaN(x) && !isNaN(y)){
           this.__axesCallbacks.get(key).thresholds = { x, y };
         }
@@ -267,7 +269,7 @@ class Gamepad{
         const buttonState =  this.state.buttons[buttonId];
         if(Number.isInteger(buttonId) && buttonState){
           const { pressed, touched, value } = buttonState;
-          button.updateState({ pressed, touched, value });
+          button.updateState({ pressed: pressed && button.threshold <= value, touched: touched && button.threshold <= value, value });
           const callbacks = Array.from(button.callbacks).filter(([ type, callback ]) => callback);
           callbacks.forEach(([ type ]) => {
             if(button[type]){
@@ -318,7 +320,6 @@ export default class JoyconJS{
       this.devices.delete(e.gamepad.index);
     }
 
-    // listen for gamepad connections
     window.addEventListener('gamepadconnected', this.connected);
     window.addEventListener('gamepaddisconnected', this.disconnected);
   }
