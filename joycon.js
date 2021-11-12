@@ -190,7 +190,7 @@ class Gamepad{
       key.forEach((_key) => {
         if(this.__buttonCallbacks.has(_key)){
           if(!isNaN(value)){
-            this.__buttonCallbacks.get(_key).threshold = value;
+            this.__buttonCallbacks.get(_key).threshold = Math.min(1, Math.max(0, value));
           }
         }
       });     
@@ -229,7 +229,7 @@ class Gamepad{
           }
         }
         if(!isNaN(x) && !isNaN(y)){
-          this.__axesCallbacks.get(key).thresholds = { x, y };
+          this.__axesCallbacks.get(key).thresholds = { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
         }
       }
     }
