@@ -158,17 +158,27 @@ data {
 
 #### Usage
 ```js
-  const joycon = new JoyconJS({
-    connected(gamepad){
-      gamepad.on('player_jump', (data) => {
-        // do something when button_1 is down
-      });
-      gamepad.axis('move_character', (data) => {
-        // move character
-      }).threshold(.2);
-    },
-    disconnected(gamepad){
-      // do some cleanup
-    }
-  });
+const joycon = new JoyconJS({
+  connected(gamepad){
+    gamepad.buttons({
+      0: 'player_jump'
+    }, true);
+    
+    gamepad.on('player_jump', (data) => {
+      // do something when button_1 is down
+      console.log(data);
+    });
+
+    // left_stick_axis is from the default config because it's not cleared like the buttons above.
+    gamepad.axis('left_stick_axis', (data) => {
+      // move character
+      console.log(data);
+    }).threshold(.2);
+
+    gamepad.help();
+  },
+  disconnected(gamepad){
+    // do some cleanup
+  }
+});
 ```
