@@ -156,14 +156,14 @@ data {
 }
 ```
 
-#### Usage
+## Usage
 ```js
 const joycon = new JoyconJS({
   connected(gamepad){
     gamepad.buttons({
       0: 'player_jump'
     }, true);
-    
+
     gamepad.on('player_jump', (data) => {
       // do something when button_1 is down
       console.log(data);
