@@ -3,6 +3,7 @@
   "version": "2.0.0",
   "description": "JoyconJS. Browser Gamepad API",
   "main": "joycon.js",
+  "homepage": "https://github.com/hjalmar/joyconjs",
   "author": "Jens Hjalmarsson",
   "license": "MIT"
 }
