@@ -44,10 +44,10 @@ class Button{
   }
   updateState(state){
     this.previousState = { ...this.state };
-    this.state = { ...state, key: this.key };
     if(this.state.value >= this.threshold){
       this.passedThreshold = true;
     }
+    this.state = { ...state, key: this.key, threshold: this.threshold };
   }
   __getCallback(type){
     const callback = this.callbacks.get(type);
@@ -101,7 +101,7 @@ class Button{
 class Axis{
   constructor(key, callback){
     this.key = key;
-    this.thresholds = { x: 0.2, y: 0.2 };
+    this.thresholds = { x: 0, y: 0 };
     this.callback = callback;
   }
   on({ x, y }){
@@ -148,8 +148,9 @@ class Gamepad{
     this.__event;
     this.__buttonmap = new Map();
     this.__axesmap = new Map();
-    this.buttons();
-    this.axes();
+    this.__identify;
+    this.buttons(buttonmap);
+    this.axes(axesmap);
   }
   get getButtonMap(){
     return Object.freeze(Array.from(this.__buttonmap));
@@ -157,21 +158,41 @@ class Gamepad{
   get getAxesMap(){
     return Object.freeze(Array.from(this.__axesmap));
   }
-  __mergeMappings(customMapping, defaultmap, target){
-    const keybinds = Object.entries(Object.assign({}, defaultmap, customMapping));
-    target.clear();
-    keybinds.forEach(([ value, key ]) => {
+  __mergeMappings(customMapping, target, clear){
+    const keybinds = Object.entries(Object.assign({}, customMapping));
+    if(clear) {
+      target.clear();
+    }
+    const bindKey = (key, value) => {
       if(target.has(key)){
         throw new Error(`Trying to bind a duplicated value. '${key}' has already been defined`);
       }
       target.set(key, Number(value));
+    };
+    keybinds.forEach(([ value, key ]) => {
+      if(Array.isArray(key)) {
+        for(const _key of key) {
+          bindKey(_key, value);
+        }
+      }else{
+        bindKey(key, value);
+      }
     });
   }
-  buttons(customMapping = {}){
-    this.__mergeMappings(customMapping, buttonmap, this.__buttonmap);
+  identify(fn) {
+    this.__identify = fn;
   }
-  axes(customMapping = {}){
-    this.__mergeMappings(customMapping, axesmap, this.__axesmap);
+  clearButtons(){
+    this.__buttonmap.clear();
+  }
+  clearAxes(){
+    this.__axesmap.clear();
+  }
+  buttons(customMapping = {}, clear){
+    this.__mergeMappings(customMapping, this.__buttonmap, clear);
+  }
+  axes(customMapping = {}, clear){
+    this.__mergeMappings(customMapping, this.__axesmap, clear);
   }
   __bind(type, key, fn, applyThreshold){
     if(typeof fn !== 'function'){
@@ -212,27 +233,34 @@ class Gamepad{
   }
   axis(key, fn){
     if(typeof fn !== 'function'){
-      throw new Error(`Invalid callback function for axis '${key}'`);
+      throw new Error(`Invalid '${type}' callback function for '${key}'`);
     }
-    if(!this.__axesCallbacks.has(key)){
-      this.__axesCallbacks.set(key, new Axis(key, fn));
-    }
-
+    
+    key = Array.isArray(key) ? key : [key]; 
+    key.forEach((_key) => {
+      if(!this.__axesCallbacks.has(_key)){
+        this.__axesCallbacks.set(_key, new Axis(_key, fn));
+      }
+    });
     const threshold = (x, y) => {
       if(isNaN(x)) return;
-      if(this.__axesCallbacks.has(key)){
-        if(isNaN(y)) {
-          if(Array.isArray(x)) {
-            [ x, y ] = x;
-          }else{
-            y = x;
+
+      key.forEach((_key) => {
+        if(this.__axesCallbacks.has(_key)){
+          if(isNaN(y)) {
+            if(Array.isArray(x)) {
+              [ x, y ] = x;
+            }else{
+              y = x;
+            }
+          }
+          if(!isNaN(x) && !isNaN(y)){
+            this.__axesCallbacks.get(_key).thresholds = { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
           }
         }
-        if(!isNaN(x) && !isNaN(y)){
-          this.__axesCallbacks.get(key).thresholds = { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
-        }
-      }
+      });
     }
+
     return { threshold };
   }
   pressed(key, fn){
@@ -253,14 +281,21 @@ class Gamepad{
   pull(){
     this.state = navigator.getGamepads()[this.uid];
     if(!this.state) return;
-    
-    // hanle axes
-    this.__axesCallbacks.forEach((axis, key) => {
+
+    if(this.__identify) {
+      const active = this.state.buttons.map((button, key) => ({ key, button, uid: this.uid })).filter(({ button }) => button.pressed);
+      if(active.length) {
+        this.__identify.call(null, active);
+      }
+    }
+
+    // handle axes
+    for(const [ key, axis ] of this.__axesCallbacks){
       const axesId = this.__axesmap.get(key);
       if(Number.isInteger(axesId)){
         axis.on.call(axis, { x: this.state.axes[axesId * 2], y: this.state.axes[(axesId * 2) + 1] });
       }
-    });
+    }
 
     // handle buttons
     for(const [ key, button ] of this.__buttonCallbacks){
@@ -284,11 +319,12 @@ class Gamepad{
   help(){
     console.log('%c JoyconJS ', 'background-color: darkslateblue ; color: white;');
     console.log('A browser javascript gamepad API library');
-    console.log('https://www.npmjs.com/package/joyconjs')
+    console.log('https://www.npmjs.com/package/joyconjs');
     console.log('');
     console.log('%c Current mappings ', 'background-color: darkslateblue ; color: white;');
-    console.table(Array.from(this.__buttonmap.keys()));
-    console.table(Array.from(this.__axesmap.keys()));
+    console.log(`%c ${this.state.id}`, 'color: mediumspringgreen;');
+    console.table(Array.from(this.__buttonmap.entries()));
+    console.table(Array.from(this.__axesmap.entries()));
   }
 }
 
@@ -329,6 +365,7 @@ export default class JoyconJS{
   }
 
   listen(){
+    if(this.animationFrameId) return;
     const loop = (time) => {
       this.pull();
       this.animationFrameId = requestAnimationFrame(loop);
@@ -341,5 +378,6 @@ export default class JoyconJS{
     window.removeEventListener('gamepadconnected', this.connected);
     window.removeEventListener('gamepaddisconnected', this.disconnected);
     cancelAnimationFrame(this.animationFrameId);
+    this.animationFrameId = 0;
   }
 }
