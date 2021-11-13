@@ -1,4 +1,4 @@
-const keymap = {
+const buttonmap = {
   0: 'button_1',
   1: 'button_2',
   2: 'button_3',
@@ -16,151 +16,210 @@ const keymap = {
   14: 'd_pad_left',
   15: 'd_pad_right',
   16: 'vendor',
+};
+
+const axesmap = {
+  0: 'left_stick_axis',
+  1: 'right_stick_axis',
+};
+
+class Button{
+  constructor(key){
+    this.key = key;
+    this.threshold = 0;
+    this.callbacks = new Map([
+      ['axis', null],
+      ['on', null],
+      ['pressed', null],
+      ['released', null],
+      ['touched', null],
+      ['untouched', null]
+    ]);
+    this.previousState = {};
+    this.state = {};
+    this.passedThreshold = false;
+  }
+  bindCallback(type, fn){
+    this.callbacks.set(type, fn);
+  }
+  updateState(state){
+    this.previousState = { ...this.state };
+    if(this.state.value >= this.threshold){
+      this.passedThreshold = true;
+    }
+    this.state = { ...state, key: this.key, threshold: this.threshold };
+  }
+  __getCallback(type){
+    const callback = this.callbacks.get(type);
+    if(typeof callback == 'function'){
+      return callback; 
+    }
+  }
+  on(){
+    if(this.state.pressed){
+      const callback = this.__getCallback('on'); 
+      if(callback && this.passedThreshold){
+        callback.call(null, { ...this.state });
+      }
+    }
+  }
+  pressed(){
+    if(this.state.pressed && !this.previousState.pressed){
+      const callback = this.__getCallback('pressed'); 
+      if(callback){
+        callback.call(null, { ...this.state });
+      }
+    }
+  }
+  released(){
+    if(this.passedThreshold && !this.state.pressed && this.previousState.pressed){
+      this.passedThreshold = false;
+      const callback = this.__getCallback('released');
+      if(callback){
+        callback.call(null, { ...this.state });
+      }
+    }
+  }
+  touched(){
+    if(this.state.touched && !this.previousState.touched){
+      const callback = this.__getCallback('touched'); 
+      if(callback){
+        callback.call(null, { ...this.state });
+      }
+    }
+  }
+  untouched(){
+    if(!this.state.touched && this.previousState.touched){
+      const callback = this.__getCallback('untouched');
+      if(callback){
+        callback.call(null, { ...this.state });
+      }
+    }
+  }
 }
 
-// NOTE: why the use of Object assign instead of spread? Edge does not play so nice with spread
-// operator. This is before they have released their new version using chromium/blink engine
+class Axis{
+  constructor(key, callback){
+    this.key = key;
+    this.thresholds = { x: 0, y: 0 };
+    this.callback = callback;
+  }
+  on({ x, y }){
+    const state = {
+      key: this.key,
+      direction: { x: 0, y: 0 },
+      x,
+      y,
+      thresholds: { ...this.thresholds },
+      angle: 0,
+      degrees: 0,
+      radians: 0,
+      overThreshold: { x: false, y: false }
+    }
+    
+    if(Math.abs(x) >= this.thresholds.x){
+      state.direction.x = x > 0 ? 1 : -1;
+      state.overThreshold.x = true;
+    }
+    
+    if(Math.abs(y) >= this.thresholds.y){
+      state.direction.y = y > 0 ? 1 : -1;
+      state.overThreshold.y = true;
+    }
+    
+    if(state.overThreshold.x || state.overThreshold.y){
+      const angle = Math.atan2(y, x);
+      const degrees = (360+Math.round(180*angle/Math.PI))%360;
+      const radians = degrees * Math.PI / 180;
+      state.angle = angle;
+      state.degrees = degrees;
+      state.radians = radians;
+      this.callback.call(null, state);
+    }
+  }
+}
+
 class Gamepad{
-  constructor(uid, gamepadData){
-    // gamepad reference
-    this._gamepadReference = gamepadData;
-    // gamepads unique id
-    this.uid = uid
-    // active state
-    this.active = true
-    // action callbacks
-    this._actionCallbacks = {
-      axes: {},
-      pressed: {},
-      touched: {},
-      on:{},
-      released: {}
+  constructor(uid){
+    this.uid = uid;
+    this.state = navigator.getGamepads()[uid];
+    this.__axesCallbacks = new Map();
+    this.__buttonCallbacks = new Map();
+    this.__event;
+    this.__buttonmap = new Map();
+    this.__axesmap = new Map();
+    this.__identify;
+    this.buttons(buttonmap);
+    this.axes(axesmap);
+  }
+  get getButtonMap(){
+    return Object.freeze(Array.from(this.__buttonmap));
+  }
+  get getAxesMap(){
+    return Object.freeze(Array.from(this.__axesmap));
+  }
+  __mergeMappings(customMapping, target, clear){
+    const keybinds = Object.entries(Object.assign({}, customMapping));
+    if(clear) {
+      target.clear();
+    }
+    const bindKey = (key, value) => {
+      if(target.has(key)){
+        throw new Error(`Trying to bind a duplicated value. '${key}' has already been defined`);
+      }
+      target.set(key, Number(value));
     };
-    // default threshold
-    this._defaultAxisThresholds = {
-      x: 0.3,
-      y: 0.3,
-    };
-    // keymappings
-    this._keymap = keymap
-    // set class properties
-    this._gamepadData = this._setNewData(gamepadData);
-    this._prevGamepadData = {}
-    // last rumble
-    this._lastRumbleTimestamp = Date.now()
+    keybinds.forEach(([ value, key ]) => {
+      if(Array.isArray(key)) {
+        for(const _key of key) {
+          bindKey(_key, value);
+        }
+      }else{
+        bindKey(key, value);
+      }
+    });
   }
-  threshold(x, y){
-    y = y || x
-    this.thresholdX(x)
-    this.thresholdY(y)
+  identify(fn) {
+    this.__identify = fn;
   }
-  thresholdX(n){
-    if(isNaN(n)){throw new Error('thresholdX requires a valid number');}
-    this._defaultAxisThresholds.x = n
+  clearButtons(){
+    this.__buttonmap.clear();
   }
-  thresholdY(n){
-    if(isNaN(n)){throw new Error('thresholdY requires a valid number');}
-    this._defaultAxisThresholds.y = n
+  clearAxes(){
+    this.__axesmap.clear();
   }
-  axis(axisName, fn){
-    return this._bindButton('axes', axisName, fn)
+  buttons(customMapping = {}, clear){
+    this.__mergeMappings(customMapping, this.__buttonmap, clear);
   }
-  on(buttonName, fn){
-    return this._bindButton('on', buttonName, fn)
+  axes(customMapping = {}, clear){
+    this.__mergeMappings(customMapping, this.__axesmap, clear);
   }
-  released(buttonName, fn){
-    return this._bindButton('released', buttonName, fn)
-  }
-  touched(buttonName, fn){
-    return this._bindButton('touched', buttonName, fn)
-  }
-  pressed(buttonName, fn){
-    return this._bindButton('pressed', buttonName, fn)
-  }
-  _bindButton(callback, buttonName, fn){
+  __bind(type, key, fn, applyThreshold){
     if(typeof fn !== 'function'){
-      throw new Error('pressed requires callback to be of type "function"');
+      throw new Error(`Invalid '${type}' callback function for '${key}'`);
     }
-    this._actionCallbacks[callback][buttonName] = fn;
-    return this;
-  }
-  pause(){
-    this.active = false;
-  }
-  resume(){
-    this.active = true;
-  }
-  handleInputActions(prev){
-    // axes
-    for(let axis in this._gamepadData.axes){
-      const ax = this._gamepadData.axes[axis]
-      if(Math.abs(ax.x) > ax.thresholds.x){
-        ax.direction.x = ax.x > 0 ? 1 : -1;
-        ax.overThreshold = true;
-      }else{
-        ax.direction.x = 0;
+    
+    key = Array.isArray(key) ? key : [key]; 
+    key.forEach((_key) => {
+      if(!this.__buttonCallbacks.has(_key)){
+        this.__buttonCallbacks.set(_key, new Button(_key));
       }
+      this.__buttonCallbacks.get(_key).bindCallback(type, fn);
+    });
 
-      if(Math.abs(ax.y) > ax.thresholds.y){
-        ax.direction.y = ax.y > 0 ? 1 : -1;
-        ax.overThreshold = true
-      }else{
-        ax.direction.y = 0;
-      }
-
-      // call the callback if something has changed
-      if(ax.overThreshold){
-        const callback = this._actionCallbacks.axes[axis];
-        if(callback){
-          const angle = Math.atan2(ax.y, ax.x);
-          const degrees = (360+Math.round(180*angle/Math.PI))%360;
-          const radians = degrees * Math.PI / 180;
-          // apply
-          ax.angle = angle;
-          ax.degrees = degrees;
-          ax.radians = radians;
-          callback.call(this, ax);
-        }
-      }
-    }
-
-    // buttons
-    for(let key in this._gamepadData.buttons){
-      const b = this._gamepadData.buttons[key];
-      // single press
-      if(b.pressed){
-        // hold down
-        const callback = this._actionCallbacks.on[this._keymap[key]];
-        if(callback){
-          callback.call(this, b, this._gamepadData);
-        }
-        if(!this._prevGamepadData[key]){
-          this._prevGamepadData[key] = b.pressed
-          const callback = this._actionCallbacks.pressed[this._keymap[key]];
-          if(callback){
-            callback.call(this, b, this._gamepadData);
+    const threshold = (value) => {
+      key.forEach((_key) => {
+        if(this.__buttonCallbacks.has(_key)){
+          if(!isNaN(value)){
+            this.__buttonCallbacks.get(_key).threshold = Math.min(1, Math.max(0, value));
           }
         }
-      // else check if the previous value was true only then call
-      // the release function. since the callback should only fire once
-    }else if(this._prevGamepadData[key]){
-      this._prevGamepadData[key] = false
-      // release callback
-      const callback = this._actionCallbacks.released[this._keymap[key]];
-      if(callback){
-        callback.call(this, b, this._gamepadData);
-      }
+      });     
     }
-      // is touched
-      if(b.touched){
-        const callback = this._actionCallbacks.touched[this._keymap[key]];
-        if(callback){
-          callback.call(this, b, this._gamepadData);
-        }
-      }
-    }
+    if(!applyThreshold) return;  
+    return { threshold };
   }
-  rumble(type, data){
+  rumble(data){
     data = Object.assign({
       startDelay: 0,
       duration: 500,
@@ -168,144 +227,157 @@ class Gamepad{
       strongMagnitude: 1.0
     }, data);
 
-    // NOTE: some notes about the rumble effect
-    // I presume we can just check it like this here
-    // also would it save battery or feel smoother if we only play rumble
-    // after time for the duration + delay is past?
-    if(this._gamepadReference.vibrationActuator && this._gamepadReference.vibrationActuator.playEffect && Math.abs(this._lastRumbleTimestamp - Date.now()) > data.duration + data.startDelay){
-      this._lastRumbleTimestamp = Date.now()
-      this._gamepadReference.vibrationActuator.playEffect(type, {
-        startDelay: data.startDelay,
-        duration: data.duration,
-        weakMagnitude: data.weakMagnitude,
-        strongMagnitude: data.strongMagnitude
-      });
+    if(this.state.vibrationActuator && this.state.vibrationActuator.playEffect){
+      this.state.vibrationActuator.playEffect(this.state.vibrationActuator.type, data);
     }
   }
-  get getKeymap(){
-    return this._keymap
-  }
-  keymap(map){
-    this._keymap = Object.assign(this._keymap, map)
-  }
-  updateData(gamepadData){
-    // do not do anything if the gamepad is paused
-    if(!this.active){
-      return;
+  axis(key, fn){
+    if(typeof fn !== 'function'){
+      throw new Error(`Invalid '${type}' callback function for '${key}'`);
     }
-    // reference so we eed to have something to compare to
-    this._gamepadData = this._setNewData(gamepadData);
-    // handle input events
-    this.handleInputActions();
-  }
-  _setNewData(gamepadData){
-    return {
-      axes: {
-        left_stick_axis: {
-          thresholds: this._defaultAxisThresholds,
-          x: gamepadData.axes[0],
-          y: gamepadData.axes[1],
-          radians: 0,
-          degrees: 0,
-          angle: 0,
-          direction: {
-            x: 0,
-            y: 0
-          },
-          overThreshold: false
-        },
-        right_stick_axis: {
-          thresholds: this._defaultAxisThresholds,
-          radians: 0,
-          degrees: 0,
-          angle: 0,
-          x: gamepadData.axes[2],
-          y: gamepadData.axes[3],
-          direction: {
-            x: 0,
-            y: 0
-          },
-          overThreshold: false
-        },
-      },
-      buttons: gamepadData.buttons
-    }
-  }
-}
-
-/*
-  gamepad wrapper
-*/
-class JoyconJS{
-  constructor(gamepadCallbacks, options){
-    // active
-    this.active = true
-    // options
-    this._options = Object.assign({autorun: true}, options);
-    // requestAnimationFrame
-    this._internalPulling = null;
-    // callbacks
-    this._gamepadCallbacks = Object.assign({}, gamepadCallbacks);
-    // connected devices
-    this.devices = {};
-    // listen for gamepad connections
-    window.addEventListener('gamepadconnected', (e) => {
-      this.devices[e.gamepad.index] = new Gamepad(e.gamepad.index, e.gamepad);
-      if(typeof this._gamepadCallbacks.connected == 'function'){
-        this._gamepadCallbacks.connected.call(this, this.devices[e.gamepad.index]);
-      }
-      if(!this._internalPulling && this._options.autorun == true){
-        this._internalPull();
-      }
-    })
-    // gamepad disconnected
-    window.addEventListener('gamepaddisconnected', (e) => {
-      delete this.devices[e.gamepad.index];
-      if(typeof this._gamepadCallbacks.disconnected == 'function'){
-        this._gamepadCallbacks.disconnected.call(this, this.devices[e.gamepad.index]);
-      }
-      if(Object.keys(this.devices).length < 1){
-        this._clearAnimationFrame()
+    
+    key = Array.isArray(key) ? key : [key]; 
+    key.forEach((_key) => {
+      if(!this.__axesCallbacks.has(_key)){
+        this.__axesCallbacks.set(_key, new Axis(_key, fn));
       }
     });
-  }
-  _clearAnimationFrame(){
-    cancelAnimationFrame(this._internalPulling);
-  }
-  pause(){
-    this.active = false;
-    this._clearAnimationFrame()
-  }
-  resume(){
-    this.active = true;
-    if(this._internalPulling){
-      this._internalPull()
+    const threshold = (x, y) => {
+      if(isNaN(x)) return;
+
+      key.forEach((_key) => {
+        if(this.__axesCallbacks.has(_key)){
+          if(isNaN(y)) {
+            if(Array.isArray(x)) {
+              [ x, y ] = x;
+            }else{
+              y = x;
+            }
+          }
+          if(!isNaN(x) && !isNaN(y)){
+            this.__axesCallbacks.get(_key).thresholds = { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
+          }
+        }
+      });
     }
+
+    return { threshold };
+  }
+  pressed(key, fn){
+    return this.__bind('pressed', key, fn, true);
+  }
+  touched(key, fn){
+    return this.__bind('touched', key, fn, true);
+  }
+  untouched(key, fn){
+    return this.__bind('untouched', key, fn);
+  }
+  on(key, fn){
+    return this.__bind('on', key, fn, true);
+  }
+  released(key, fn){
+    return this.__bind('released', key, fn);
   }
   pull(){
-    // pull gamepad data from navigator
-    const gamepadList = navigator.getGamepads();
-    // update devices
-    for(let index = 0; index < gamepadList.length; index++){
-      const device = gamepadList[index];
-      if(device){
-        if(device.index in this.devices){
-          // update device data
-          this.devices[device.index].updateData(device);
+    this.state = navigator.getGamepads()[this.uid];
+    if(!this.state) return;
+
+    if(this.__identify) {
+      const active = this.state.buttons.map((button, key) => ({ key, button, uid: this.uid })).filter(({ button }) => button.pressed);
+      if(active.length) {
+        this.__identify.call(null, active);
+      }
+    }
+
+    // handle axes
+    for(const [ key, axis ] of this.__axesCallbacks){
+      const axesId = this.__axesmap.get(key);
+      if(Number.isInteger(axesId)){
+        axis.on.call(axis, { x: this.state.axes[axesId * 2], y: this.state.axes[(axesId * 2) + 1] });
+      }
+    }
+
+    // handle buttons
+    for(const [ key, button ] of this.__buttonCallbacks){
+      if(button){
+        const buttonId = this.__buttonmap.get(button.key);
+        const buttonState =  this.state.buttons[buttonId];
+        if(Number.isInteger(buttonId) && buttonState){
+          const { pressed, touched, value } = buttonState;
+          button.updateState({ pressed: pressed && button.threshold <= value, touched: touched && button.threshold <= value, value });
+          const callbacks = Array.from(button.callbacks).filter(([ type, callback ]) => callback);
+          callbacks.forEach(([ type ]) => {
+            if(button[type]){
+              button[type].call(button);
+            }
+          });
         }
       }
     }
   }
-  _internalPull(){
-    // simulate the gameloop
-    const gameloop = (time) => {
-      // pull device data
-      this.pull();
-      // loop
-      this._internalPulling = requestAnimationFrame((time) => gameloop(time));
-    }
-    this._internalPulling = requestAnimationFrame((time) => gameloop(time));
+
+  help(){
+    console.log('%c JoyconJS ', 'background-color: darkslateblue ; color: white;');
+    console.log('A browser javascript gamepad API library');
+    console.log('https://www.npmjs.com/package/joyconjs');
+    console.log('');
+    console.log('%c Current mappings ', 'background-color: darkslateblue ; color: white;');
+    console.log(`%c ${this.state.id}`, 'color: mediumspringgreen;');
+    console.table(Array.from(this.__buttonmap.entries()));
+    console.table(Array.from(this.__axesmap.entries()));
   }
 }
 
-export default JoyconJS;
+export default class JoyconJS{
+  constructor(callbacks, options){
+    this.animationFrameId = 0;
+    this.__callbacks = {
+      connected: _ => _,
+      disconnected: _ => _,
+    }
+    Object.assign(this.__callbacks, callbacks);
+
+    this.options = {};
+    Object.assign(this.options, options);
+
+    this.devices = new Map();
+
+    this.connected = (e) => {
+      this.devices.set(e.gamepad.index, new Gamepad(e.gamepad.index));
+      if(typeof this.__callbacks.connected == 'function'){
+        this.__callbacks.connected.call(this, this.devices.get(e.gamepad.index));
+      }
+    }
+
+    this.disconnected = (e) => {
+      if(typeof this.__callbacks.disconnected == 'function'){
+        this.__callbacks.disconnected.call(this, this.devices.get(e.gamepad.index));
+      }
+      this.devices.delete(e.gamepad.index);
+    }
+
+    window.addEventListener('gamepadconnected', this.connected);
+    window.addEventListener('gamepaddisconnected', this.disconnected);
+  }
+
+  pull(){
+    this.devices.forEach((device) => device.pull());
+  }
+
+  listen(){
+    if(this.animationFrameId) return;
+    const loop = (time) => {
+      this.pull();
+      this.animationFrameId = requestAnimationFrame(loop);
+    }
+    this.animationFrameId = requestAnimationFrame(loop);
+  }
+
+  destroy(){
+    this.devices.clear();
+    window.removeEventListener('gamepadconnected', this.connected);
+    window.removeEventListener('gamepaddisconnected', this.disconnected);
+    cancelAnimationFrame(this.animationFrameId);
+    this.animationFrameId = 0;
+  }
+}

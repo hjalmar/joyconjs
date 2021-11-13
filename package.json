@@ -1,9 +1,9 @@
 {
   "name": "joyconjs",
-  "version": "1.0.0",
-  "description": "",
+  "version": "2.0.0",
+  "description": "JoyconJS. Browser Gamepad API",
   "main": "joycon.js",
-  "scripts": {},
+  "homepage": "https://github.com/hjalmar/joyconjs",
   "author": "Jens Hjalmarsson",
-  "license": "ISC"
+  "license": "MIT"
 }
